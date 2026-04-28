@@ -14,13 +14,47 @@ preserves input order, so the output DataFrame is stable.
 Persistence writes a parquet file with the run's git-hash, the package
 version, the timestamp, and a JSON-encoded snapshot of the runner
 parameters embedded in the schema metadata.
+
+Windows usage note
+------------------
+
+On Windows the ``multiprocessing`` start method is ``spawn``: every
+worker re-imports the script that launched it. Calling
+:meth:`MonteCarloRunner.run` from un-guarded module-level code therefore
+re-creates the runner — and another Pool — in every worker, recursively
+spawning processes until the OS runs out of resources (a fork bomb that
+locks up the terminal and cannot be Ctrl+C-killed). Always wrap the
+launch in an ``if __name__ == "__main__":`` guard:
+
+.. code-block:: python
+
+    from monopoly.simulation import MonteCarloRunner
+    from monopoly.strategies import CautiousStrategy, AggressiveStrategy
+
+    if __name__ == "__main__":
+        runner = MonteCarloRunner(
+            strategy_factories=[
+                ("cautious", CautiousStrategy),
+                ("aggressive", AggressiveStrategy),
+            ],
+            n_games=1000,
+            seed=42,
+            n_workers=4,
+        )
+        df = runner.run()
+
+The runner detects construction inside a worker process at ``__init__``
+and raises :class:`RuntimeError` to break the recursion early, but the
+guard is still the right answer.
 """
 
 from __future__ import annotations
 
 import importlib.metadata
 import json
+import multiprocessing
 import os
+import pickle
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -104,14 +138,48 @@ class MonteCarloRunner:
         n_workers: int = -1,
         board_path: str | None = None,
     ) -> None:
+        # Refuse construction inside an already-spawned multiprocessing worker.
+        # If the user's launching script lacks ``if __name__ == "__main__":``,
+        # every worker re-imports it and re-runs the runner construction,
+        # which then spawns its own Pool — recursively, ad infinitum. We break
+        # the chain here with a clear error before any further workers spawn.
+        if multiprocessing.parent_process() is not None:
+            raise RuntimeError(
+                "MonteCarloRunner is being constructed inside a multiprocessing "
+                "worker. Wrap the launching script's top-level code in an "
+                '`if __name__ == "__main__":` guard. On Windows (spawn start '
+                "method), unguarded module-level code is re-executed in every "
+                "worker, which would recursively spawn more pools and exhaust "
+                "system resources."
+            )
+
         names = [n for n, _ in strategy_factories]
         if len(set(names)) != len(names):
             raise ValueError("Strategy names must be unique within a runner.")
         if n_games < 1:
             raise ValueError("n_games must be >= 1")
+
         self.strategy_factories: list[tuple[str, StrategyFactory]] = list(
             strategy_factories
         )
+
+        # Validate the factories are picklable. Lambdas, closures, and bound
+        # methods are not — and in multiprocessing they would either fail at
+        # dispatch or, worse, hang the workers silently. Catch this eagerly so
+        # the diagnostic points at the offending factory rather than at a
+        # cryptic Pool error.
+        for name, factory in self.strategy_factories:
+            try:
+                pickle.dumps(factory)
+            except (pickle.PicklingError, AttributeError, TypeError) as exc:
+                raise TypeError(
+                    f"Strategy factory for {name!r} is not picklable "
+                    f"({type(factory).__name__}: {factory!r}). Use a top-level "
+                    "class or function — lambdas, closures, and bound methods "
+                    "cannot cross multiprocessing worker boundaries. "
+                    f"Underlying pickle error: {exc}"
+                ) from exc
+
         self.n_games = int(n_games)
         self.max_turns = int(max_turns)
         self.starting_cash = int(starting_cash)
