@@ -56,8 +56,9 @@ import multiprocessing
 import os
 import pickle
 import subprocess
+import traceback
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from multiprocessing import Pool
 from pathlib import Path
@@ -77,7 +78,7 @@ if TYPE_CHECKING:
 
 
 StrategyFactory = Callable[[], "Strategy"]
-EndReason = Literal["bankruptcy", "timeout"]
+EndReason = Literal["bankruptcy", "timeout", "error"]
 
 
 @dataclass
@@ -86,6 +87,9 @@ class GameResult:
 
     All ``dict[str, int]`` fields are keyed by ``strategy_name`` (the
     same string used in :class:`MonteCarloRunner.strategy_factories`).
+    ``end_reason="error"`` indicates the game raised an unhandled
+    exception inside the worker; the message is captured in ``error``
+    and the numeric fields are zeroed out.
     """
 
     game_id: int
@@ -99,6 +103,7 @@ class GameResult:
     n_properties: dict[str, int]
     n_houses: dict[str, int]
     n_hotels: dict[str, int]
+    error: str | None = field(default=None)
 
 
 class MonteCarloRunner:
@@ -213,10 +218,10 @@ class MonteCarloRunner:
             for game_id in range(self.n_games)
         ]
         if n_workers <= 1:
-            results = [_run_one_game(a) for a in args]
+            results = [_run_one_game_safe(a) for a in args]
         else:
             with Pool(processes=n_workers) as pool:
-                results = pool.map(_run_one_game, args)
+                results = pool.map(_run_one_game_safe, args)
         return self._results_to_df(results)
 
     def persist(
@@ -277,6 +282,7 @@ class MonteCarloRunner:
                 "winner_index": r.winner_index,
                 "turns": r.turns,
                 "end_reason": r.end_reason,
+                "error": r.error,
             }
             for n in names:
                 row[f"final_net_worth_{n}"] = r.final_net_worth.get(n, 0)
@@ -293,6 +299,47 @@ class MonteCarloRunner:
 # ----------------------------------------------------------------------
 # Worker (top-level so it pickles for multiprocessing.Pool)
 # ----------------------------------------------------------------------
+
+
+def _run_one_game_safe(
+    args: tuple[
+        int,
+        int,
+        list[tuple[str, StrategyFactory]],
+        int,
+        int,
+        str | None,
+    ],
+) -> GameResult:
+    """Safe wrapper around :func:`_run_one_game`.
+
+    Any exception raised inside the game (a buggy strategy, a corrupted
+    board file, etc.) is caught and rendered as a ``GameResult`` with
+    ``end_reason="error"`` and the exception summary in ``error``. This
+    keeps the Pool draining: a single failure cannot deadlock or stall
+    the whole run.
+    """
+    try:
+        return _run_one_game(args)
+    except Exception as exc:  # noqa: BLE001 — boundary catch for worker
+        game_id, seed, factories, _, _, _ = args
+        names = [n for n, _ in factories]
+        zeroed = {n: 0 for n in names}
+        return GameResult(
+            game_id=game_id,
+            seed=seed,
+            winner_strategy=None,
+            winner_index=None,
+            turns=0,
+            end_reason="error",
+            final_net_worth=dict(zeroed),
+            final_cash=dict(zeroed),
+            n_properties=dict(zeroed),
+            n_houses=dict(zeroed),
+            n_hotels=dict(zeroed),
+            error=f"{type(exc).__name__}: {exc}\n"
+            + "".join(traceback.format_exception(exc))[:1000],
+        )
 
 
 def _run_one_game(

@@ -186,6 +186,7 @@ def test_game_result_is_dataclass_with_expected_fields():
         "n_properties",
         "n_houses",
         "n_hotels",
+        "error",
     }
     actual = {f.name for f in GameResult.__dataclass_fields__.values()}
     assert actual == fields
