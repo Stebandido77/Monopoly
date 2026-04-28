@@ -118,6 +118,7 @@ class Game:
             The destination tile.
         """
         old_pos = player.position
+        cash_before = player.cash
         passed_go = False
         if steps <= 0:
             new_pos = (old_pos + steps) % len(self.board)
@@ -132,7 +133,11 @@ class Game:
         tile = self.board.tiles[new_pos]
         if self.verbose:
             prefix = "💰 " if passed_go else ""
-            suffix = " +$200 GO" if passed_go else ""
+            if passed_go:
+                salary = self.board.bank.go_salary
+                suffix = f" +${salary} GO (cash: ${cash_before}→${player.cash})"
+            else:
+                suffix = ""
             print(
                 f"[T{self._turn}] {player.name}: {prefix}pos {old_pos}→{new_pos} "
                 f"({tile.name}){suffix}"
