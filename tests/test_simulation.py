@@ -69,6 +69,38 @@ def test_smoke_different_seeds_diverge():
     assert state1 != state2
 
 
+def _run_5_turns(seed: int, verbose: bool) -> None:
+    """Helper for verbose-mode tests: run 5 outer rounds with two players."""
+    board = Board.default()
+    p1 = Player("P1")
+    p2 = Player("P2")
+    strategies = {"P1": RandomStrategy(), "P2": RandomStrategy()}
+    game = Game(
+        [p1, p2], board, strategies=strategies, seed=seed, verbose=verbose
+    )
+    for _ in range(5):
+        for player in game.players:
+            if player.cash < 0:
+                continue
+            game.play_turn(player)
+
+
+def test_verbose_false_prints_nothing(capsys):
+    """With verbose=False (default), play_turn must produce no stdout."""
+    _run_5_turns(seed=42, verbose=False)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_verbose_true_prints_at_least_one_line_in_5_turns(capsys):
+    """With verbose=True, at least one event line is emitted within 5 rounds."""
+    _run_5_turns(seed=42, verbose=True)
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.splitlines() if line.strip()]
+    assert len(lines) >= 1
+
+
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     seed=st.integers(min_value=0, max_value=10_000),

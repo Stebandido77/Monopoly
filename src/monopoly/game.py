@@ -40,6 +40,11 @@ class Game:
         will refuse to buy and will always attempt to roll out of jail.
     seed : int or None
         Seed for the dice RNG. Pass ``None`` for system entropy.
+    verbose : bool
+        When ``True``, :meth:`play_turn` prints one line per key event
+        (roll, move, purchase, rent, jail transitions, bankruptcy) for
+        manual debugging. Adds no new events to the engine itself; it only
+        narrates the existing flow. Defaults to ``False``.
 
     Notes
     -----
@@ -54,17 +59,45 @@ class Game:
         board: Board,
         strategies: dict[str, Strategy] | None = None,
         seed: int | None = None,
+        verbose: bool = False,
     ) -> None:
         self.players: list[Player] = players
         self.board: Board = board
         self.strategies: dict[str, Strategy] = dict(strategies) if strategies else {}
         self.rng: np.random.Generator = np.random.default_rng(seed)
+        self.verbose: bool = verbose
+        self._turn: int = 0
         self.owners: dict[int, Player | None] = {
             t.position: None for t in board.tiles if t.is_property
         }
         self._jail_position: int = next(
             t.position for t in board.tiles if t.type == "jail"
         )
+
+    # ------------------------------------------------------------------
+    # Verbose-mode helpers (no behavior change when verbose is False)
+    # ------------------------------------------------------------------
+
+    def _emit_action(self, player: Player, action: str, cash_before: int) -> None:
+        """Print one action line ``[T#] name: action (cash: $a→$b)`` if verbose."""
+        if not self.verbose:
+            return
+        print(
+            f"[T{self._turn}] {player.name}: {action} "
+            f"(cash: ${cash_before}→${player.cash})"
+        )
+
+    def _roll_and_log(self, player: Player) -> tuple[int, int]:
+        """Roll the dice and (in verbose mode) log the outcome."""
+        d1, d2 = self.roll_dice()
+        if self.verbose:
+            suffix = " *DOBLE*" if d1 == d2 else ""
+            print(f"[T{self._turn}] {player.name}: roll ({d1},{d2})={d1 + d2}{suffix}")
+        return d1, d2
+
+    # ------------------------------------------------------------------
+    # Engine
+    # ------------------------------------------------------------------
 
     def roll_dice(self) -> tuple[int, int]:
         """Roll two six-sided dice using the game's RNG."""
@@ -84,16 +117,27 @@ class Game:
         Tile
             The destination tile.
         """
+        old_pos = player.position
+        passed_go = False
         if steps <= 0:
-            player.position = (player.position + steps) % len(self.board)
-            return self.board.tiles[player.position]
-        unwrapped = player.position + steps
-        new_pos = unwrapped % len(self.board)
-        if new_pos < unwrapped:
-            # Wrapped past 0: passed (or landed on) GO exactly once.
-            player.cash += self.board.bank.go_salary
+            new_pos = (old_pos + steps) % len(self.board)
+        else:
+            unwrapped = old_pos + steps
+            new_pos = unwrapped % len(self.board)
+            if new_pos < unwrapped:
+                # Wrapped past 0: passed (or landed on) GO exactly once.
+                player.cash += self.board.bank.go_salary
+                passed_go = True
         player.position = new_pos
-        return self.board.tiles[new_pos]
+        tile = self.board.tiles[new_pos]
+        if self.verbose:
+            prefix = "💰 " if passed_go else ""
+            suffix = " +$200 GO" if passed_go else ""
+            print(
+                f"[T{self._turn}] {player.name}: {prefix}pos {old_pos}→{new_pos} "
+                f"({tile.name}){suffix}"
+            )
+        return tile
 
     def _send_to_jail(self, player: Player) -> None:
         """Move ``player`` to jail and reset jail / doubles bookkeeping."""
@@ -126,27 +170,33 @@ class Game:
 
         fine = self.board.bank.jail_fine
         if action == "pay" and player.cash >= fine:
+            cash_before = player.cash
             player.cash -= fine
             player.in_jail = False
             player.jail_turns = 0
             player.doubles_streak = 0
-            return self.roll_dice()
+            self._emit_action(player, "🔒 pagó fianza $50", cash_before)
+            return self._roll_and_log(player)
 
-        d1, d2 = self.roll_dice()
+        d1, d2 = self._roll_and_log(player)
         if d1 == d2:
             # Per Hasbro rules, a doubles escape ends the turn after moving
             # — no bonus roll. doubles_streak is reset to enforce that.
+            cash_before = player.cash
             player.in_jail = False
             player.jail_turns = 0
             player.doubles_streak = 0
+            self._emit_action(player, "🔒 salió cárcel con doble", cash_before)
             return d1, d2
 
         player.jail_turns += 1
         if player.jail_turns >= 3:
+            cash_before = player.cash
             player.cash -= fine  # may go negative; bankruptcy resolved later
             player.in_jail = False
             player.jail_turns = 0
             player.doubles_streak = 0
+            self._emit_action(player, "🔒 fianza forzada $50", cash_before)
             return d1, d2
 
         return None
@@ -163,15 +213,20 @@ class Game:
         if self.owners[tile.position] is not None:
             return False
         if tile.price is None or player.cash < tile.price:
+            self._emit_action(player, "sin dueño", player.cash)
             return False
         strategy = self.strategies.get(player.name)
         if strategy is None:
+            self._emit_action(player, "sin dueño", player.cash)
             return False
         if not strategy.decide_purchase(player, tile, self):
+            self._emit_action(player, "rechazó comprar", player.cash)
             return False
+        cash_before = player.cash
         player.cash -= tile.price
         player.properties.append(tile)
         self.owners[tile.position] = player
+        self._emit_action(player, f"compró {tile.name} por ${tile.price}", cash_before)
         return True
 
     def calculate_rent(self, tile: Tile, dice_roll: int) -> int:
@@ -228,8 +283,10 @@ class Game:
         if owner is None or owner is payer:
             return 0
         rent = self.calculate_rent(tile, dice_roll)
+        cash_before = payer.cash
         payer.cash -= rent
         owner.cash += rent
+        self._emit_action(payer, f"💰 pagó renta ${rent} a {owner.name}", cash_before)
         return rent
 
     def check_bankruptcy(self, player: Player) -> bool:
@@ -242,9 +299,11 @@ class Game:
         """
         if player.cash >= 0:
             return False
+        cash_before = player.cash
         for tile in player.properties:
             self.owners[tile.position] = None
         player.properties.clear()
+        self._emit_action(player, "💀 BANCARROTA", cash_before)
         return True
 
     def play_turn(self, player: Player) -> None:
@@ -257,6 +316,8 @@ class Game:
         if player.cash < 0:
             return
 
+        self._turn += 1
+
         if player.in_jail:
             roll = self.handle_jail(player)
             if roll is None:
@@ -268,12 +329,14 @@ class Game:
 
         player.doubles_streak = 0
         while True:
-            d1, d2 = self.roll_dice()
+            d1, d2 = self._roll_and_log(player)
             is_double = d1 == d2
             if is_double:
                 player.doubles_streak += 1
                 if player.doubles_streak >= 3:
+                    cash_before = player.cash
                     self._send_to_jail(player)
+                    self._emit_action(player, "🔒 fue a cárcel (3 dobles)", cash_before)
                     return
 
             self._move_and_resolve(player, d1 + d2)
@@ -290,11 +353,15 @@ class Game:
         """Move ``player`` and resolve the destination tile."""
         tile = self.move_player(player, steps)
         if tile.type == "go_to_jail":
+            cash_before = player.cash
             self._send_to_jail(player)
+            self._emit_action(player, "🔒 fue a cárcel", cash_before)
             return
         if tile.type == "tax":
             assert tile.tax_amount is not None
+            cash_before = player.cash
             player.cash -= tile.tax_amount
+            self._emit_action(player, f"💰 pagó impuesto ${tile.tax_amount}", cash_before)
             return
         if tile.is_property:
             owner = self.owners[tile.position]
