@@ -28,6 +28,11 @@ where = ["src"]
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
+# Defensive double exclusion: legacy/ holds frozen reference notebooks
+# (see legacy/README.md), and we never want ruff to touch *any* notebook
+# regardless of where it lives. Notebook linting requires nbqa, which is
+# out of scope.
+exclude = ["legacy/", "*.ipynb"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM"]
