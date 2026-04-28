@@ -101,6 +101,45 @@ def test_verbose_true_prints_at_least_one_line_in_5_turns(capsys):
     assert len(lines) >= 1
 
 
+def test_smoke_four_players_500_turns_seed_42():
+    """Phase-2 smoke: 4 RandomStrategy players, 500 outer rounds, seed=42.
+
+    Asserts no exception is raised and that the bank-inventory and
+    monopoly-uniformity invariants hold at the end of the run. With four
+    players and 500 rounds the engine exercises card draws, building,
+    bankruptcy with creditor, and the management phase repeatedly.
+    """
+    board = Board.default()
+    players = [Player(f"P{i}") for i in range(1, 5)]
+    strategies = {p.name: RandomStrategy() for p in players}
+    game = Game(players, board, strategies=strategies, seed=42)
+    for _ in range(500):
+        survivors = [p for p in game.players if p.cash >= 0]
+        if len(survivors) <= 1:
+            break
+        for player in game.players:
+            if player.cash < 0:
+                continue
+            game.play_turn(player)
+
+    # Invariant 1: bank house inventory is conserved.
+    houses_in_play = sum(game.houses.values())
+    hotels_in_play = sum(1 for v in game.hotels.values() if v)
+    assert game.available_houses + houses_in_play == 32, (
+        f"houses: bank={game.available_houses} in_play={houses_in_play}"
+    )
+    assert game.available_hotels + hotels_in_play == 12, (
+        f"hotels: bank={game.available_hotels} in_play={hotels_in_play}"
+    )
+
+    # Invariant 2: uniformity within every monopoly group always holds.
+    for color, group in board.color_groups.items():
+        levels = [game._building_count(t) for t in group]
+        assert max(levels) - min(levels) <= 1, (
+            f"uniformity violated on {color}: {levels}"
+        )
+
+
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     seed=st.integers(min_value=0, max_value=10_000),
