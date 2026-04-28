@@ -368,6 +368,16 @@ class Game:
             player.cash -= tile.tax_amount
             self._emit_action(player, f"💰 pagó impuesto ${tile.tax_amount}", cash_before)
             return
+        if tile.type in ("chance", "community_chest"):
+            # Cards are deferred to a later phase. We narrate the landing in
+            # verbose mode so the gap is visible during manual debugging
+            # rather than silently no-op.
+            if self.verbose:
+                print(
+                    f"[T{self._turn}] {player.name}: cayó en {tile.name} "
+                    f"(sin efecto - cartas no implementadas en Fase 1)"
+                )
+            return
         if tile.is_property:
             owner = self.owners[tile.position]
             if owner is None:
