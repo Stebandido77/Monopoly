@@ -7,9 +7,11 @@ a 32-bit integer seed for that game's :class:`monopoly.game.Game`. As a
 consequence, the worker count never affects results: a 1000-game run
 produces the same DataFrame whether executed in one process or forty.
 
-Optional multiprocessing parallelization (``multiprocessing.Pool``) maps
-the (game_id, seed, factories, ...) tuples across workers. ``Pool.map``
-preserves input order, so the output DataFrame is stable.
+Parallelization uses ``multiprocessing.Pool.imap_unordered`` with a
+chunksize tuned for the run, and every worker call is wrapped in a
+top-level safe handler so a single failing game cannot stall the pool —
+the offending game is reported with ``end_reason="error"`` and the run
+proceeds.
 
 Persistence writes a parquet file with the run's git-hash, the package
 version, the timestamp, and a JSON-encoded snapshot of the runner
@@ -204,7 +206,20 @@ class MonteCarloRunner:
     # ------------------------------------------------------------------
 
     def run(self) -> pd.DataFrame:
-        """Execute all games and return a flattened DataFrame (one row per game)."""
+        """Execute all games and return a flattened DataFrame (one row per game).
+
+        Uses :meth:`Pool.imap_unordered` with a chunksize sized to the run
+        (``max(1, n_games // (n_workers * 4))``) so results stream back as
+        they complete and chunk overhead stays low. Out-of-order delivery
+        is fine: the per-game seed is fixed at construction, so the
+        outcome of each row depends only on its seed, and
+        :meth:`_results_to_df` sorts by ``game_id`` before returning.
+
+        Each worker call goes through :func:`_run_one_game_safe`, which
+        catches any exception raised inside a game and converts it to a
+        :class:`GameResult` with ``end_reason="error"``. A failing game
+        therefore cannot stall the pool.
+        """
         n_workers = self._resolve_workers()
         args = [
             (
@@ -220,8 +235,13 @@ class MonteCarloRunner:
         if n_workers <= 1:
             results = [_run_one_game_safe(a) for a in args]
         else:
+            chunksize = max(1, self.n_games // (n_workers * 4))
             with Pool(processes=n_workers) as pool:
-                results = pool.map(_run_one_game_safe, args)
+                results = list(
+                    pool.imap_unordered(
+                        _run_one_game_safe, args, chunksize=chunksize
+                    )
+                )
         return self._results_to_df(results)
 
     def persist(
