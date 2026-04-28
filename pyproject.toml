@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "monopoly"
+version = "0.1.0"
+description = "Quantitative benchmark of Monopoly strategies (heuristic, MILP, simulated annealing, Markov-guided)."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Esteban Labastidas" },
+]
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "pyyaml>=6.0",
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "hypothesis>=6.100",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
