@@ -1,10 +1,16 @@
 """Monopoly game engine.
 
-Phase 1 scope: movement (with the GO salary paid for landing on or passing
-GO), the doubles bonus rule (and three-doubles-to-jail), and jail handling
-(escape via doubles, paying the $50 fine, or the forced-pay-and-move on the
-third failed attempt). Property purchase, rent, and bankruptcy are added in
-later commits in this phase.
+Phase 1 covers: movement (with the GO salary paid for landing on or
+passing GO), the doubles bonus rule (and three-doubles-to-jail), jail
+handling (escape via doubles, paying the $50 fine, or the forced fine on
+the third failed attempt), property purchase via the player's strategy,
+rent (with the monopoly-doubling rule for streets, the 25/50/100/200 rent
+schedule for railroads, and the 4x/10x dice-roll multiplier for utilities),
+and simple bank-only bankruptcy.
+
+Out of scope this phase: house and hotel construction, mortgages, Chance
+and Community Chest cards, auctions, trading, and bankruptcy with a
+creditor.
 """
 
 from __future__ import annotations
@@ -53,6 +59,9 @@ class Game:
         self.board: Board = board
         self.strategies: dict[str, Strategy] = dict(strategies) if strategies else {}
         self.rng: np.random.Generator = np.random.default_rng(seed)
+        self.owners: dict[int, Player | None] = {
+            t.position: None for t in board.tiles if t.is_property
+        }
         self._jail_position: int = next(
             t.position for t in board.tiles if t.type == "jail"
         )
@@ -142,16 +151,111 @@ class Game:
 
         return None
 
+    def buy_property(self, player: Player, tile: Tile) -> bool:
+        """Attempt purchase of ``tile`` by ``player``.
+
+        Phase 1 has no auctions: when the lander declines (or has no
+        strategy), the property simply remains in the bank's hand. Returns
+        ``True`` iff the purchase happened.
+        """
+        if not tile.is_property:
+            return False
+        if self.owners[tile.position] is not None:
+            return False
+        if tile.price is None or player.cash < tile.price:
+            return False
+        strategy = self.strategies.get(player.name)
+        if strategy is None:
+            return False
+        if not strategy.decide_purchase(player, tile, self):
+            return False
+        player.cash -= tile.price
+        player.properties.append(tile)
+        self.owners[tile.position] = player
+        return True
+
+    def calculate_rent(self, tile: Tile, dice_roll: int) -> int:
+        """Compute the rent owed for landing on ``tile``.
+
+        Per Hasbro rules:
+
+        * Streets pay the base rent, doubled when the owner holds the full
+          color group with no buildings (Phase 1 has no buildings, so this
+          is always the path taken on a complete group).
+        * Railroads pay 25, 50, 100, or 200 for 1, 2, 3, or 4 owned by the
+          same player.
+        * Utilities pay 4x the dice roll if one is owned, 10x if both are.
+
+        Returns 0 for unowned or self-owned tiles, and for tiles that are
+        not properties.
+        """
+        owner = self.owners.get(tile.position)
+        if owner is None:
+            return 0
+        if tile.type == "street":
+            assert tile.rent is not None and tile.color_group is not None
+            base = tile.rent[0]
+            group = self.board.color_groups[tile.color_group]
+            if all(self.owners[t.position] is owner for t in group):
+                return base * 2
+            return base
+        if tile.type == "railroad":
+            assert tile.rent is not None
+            count = sum(
+                1
+                for r in self.board.tiles_by_type["railroad"]
+                if self.owners[r.position] is owner
+            )
+            return tile.rent[count - 1]
+        if tile.type == "utility":
+            assert tile.rent_multipliers is not None
+            count = sum(
+                1
+                for u in self.board.tiles_by_type["utility"]
+                if self.owners[u.position] is owner
+            )
+            return tile.rent_multipliers[count - 1] * dice_roll
+        return 0
+
+    def pay_rent(self, payer: Player, tile: Tile, dice_roll: int) -> int:
+        """Transfer rent from ``payer`` to the owner of ``tile``.
+
+        Returns the amount paid (0 if unowned or self-owned). The payer's
+        cash may go negative; bankruptcy is handled by
+        :meth:`check_bankruptcy`.
+        """
+        owner = self.owners.get(tile.position)
+        if owner is None or owner is payer:
+            return 0
+        rent = self.calculate_rent(tile, dice_roll)
+        payer.cash -= rent
+        owner.cash += rent
+        return rent
+
+    def check_bankruptcy(self, player: Player) -> bool:
+        """If ``player.cash < 0``, return their properties to the bank.
+
+        Phase 1 only models bankruptcy to the bank: any properties owned
+        become unowned again and the player's holdings list is cleared.
+        Bankruptcy with a creditor (where the creditor receives the
+        properties) is out of scope for this phase.
+        """
+        if player.cash >= 0:
+            return False
+        for tile in player.properties:
+            self.owners[tile.position] = None
+        player.properties.clear()
+        return True
+
     def play_turn(self, player: Player) -> None:
         """Execute one full turn for ``player``.
 
-        In this phase the turn covers: jail resolution; rolling for doubles
-        with the bonus-roll rule; landing on the Go-to-Jail tile; and the
-        three-doubles-to-jail rule. Property landings and tax/rent payments
-        are handled in subsequent commits.
+        Resolves jail, doubles bonuses (and three-doubles-to-jail),
+        movement, landing effects (Go-to-Jail, tax, property purchase or
+        rent), and bankruptcy. Bankrupt players are skipped.
         """
         if player.cash < 0:
-            return  # already out (bankruptcy implemented in a later commit)
+            return
 
         if player.in_jail:
             roll = self.handle_jail(player)
@@ -159,6 +263,7 @@ class Game:
                 return
             d1, d2 = roll
             self._move_and_resolve(player, d1 + d2)
+            self.check_bankruptcy(player)
             return
 
         player.doubles_streak = 0
@@ -173,6 +278,8 @@ class Game:
 
             self._move_and_resolve(player, d1 + d2)
 
+            if self.check_bankruptcy(player):
+                return
             if player.in_jail:
                 # Sent there mid-turn (e.g., landed on Go to Jail).
                 return
@@ -180,14 +287,21 @@ class Game:
                 return
 
     def _move_and_resolve(self, player: Player, steps: int) -> None:
-        """Move and apply only the landings handled in this phase.
-
-        Currently: ``go_to_jail`` sends the player to jail. All other
-        landing effects (purchase, rent, tax) are added in later commits.
-        """
+        """Move ``player`` and resolve the destination tile."""
         tile = self.move_player(player, steps)
         if tile.type == "go_to_jail":
             self._send_to_jail(player)
+            return
+        if tile.type == "tax":
+            assert tile.tax_amount is not None
+            player.cash -= tile.tax_amount
+            return
+        if tile.is_property:
+            owner = self.owners[tile.position]
+            if owner is None:
+                self.buy_property(player, tile)
+            elif owner is not player:
+                self.pay_rent(player, tile, steps)
 
     def play(self, max_turns: int = 1000) -> Player | None:
         """Run the game for at most ``max_turns`` rounds and return a winner.
