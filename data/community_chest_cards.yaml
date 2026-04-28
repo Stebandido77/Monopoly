@@ -1,0 +1,90 @@
+# Community Chest deck — 16 official Hasbro cards (modern US edition).
+#
+# Per ADR-002 we follow the official rule book: there is no Free Parking
+# pot, so taxes and fines are bank revenue and do not feed back into the
+# game state.
+#
+# "Get Out of Jail Free" carries ``deck: community_chest`` so the engine
+# can route the card back to the right deck on use.
+
+cards:
+  - name: Advance to Go (Collect $200)
+    effect_type: move_to_position
+    payload:
+      position: 0
+      pass_go: true
+
+  - name: Bank error in your favor - collect $200
+    effect_type: collect
+    payload:
+      amount: 200
+
+  - name: Doctor's fee - pay $50
+    effect_type: pay
+    payload:
+      amount: 50
+
+  - name: From sale of stock - collect $50
+    effect_type: collect
+    payload:
+      amount: 50
+
+  - name: Get Out of Jail Free (Community Chest)
+    effect_type: get_out_of_jail
+    payload:
+      deck: community_chest
+
+  - name: Go to Jail
+    effect_type: go_to_jail
+    payload: {}
+
+  - name: Holiday fund matures - collect $100
+    effect_type: collect
+    payload:
+      amount: 100
+
+  - name: Income tax refund - collect $20
+    effect_type: collect
+    payload:
+      amount: 20
+
+  - name: It is your birthday - collect $10 from each player
+    effect_type: collect_from_each_player
+    payload:
+      amount: 10
+
+  - name: Life insurance matures - collect $100
+    effect_type: collect
+    payload:
+      amount: 100
+
+  - name: Hospital fees - pay $100
+    effect_type: pay
+    payload:
+      amount: 100
+
+  - name: School fees - pay $50
+    effect_type: pay
+    payload:
+      amount: 50
+
+  - name: Receive $25 consultancy fee
+    effect_type: collect
+    payload:
+      amount: 25
+
+  - name: Street repairs - $40 per house, $115 per hotel
+    effect_type: pay_per_house_and_hotel
+    payload:
+      per_house: 40
+      per_hotel: 115
+
+  - name: Won second prize in beauty contest - collect $10
+    effect_type: collect
+    payload:
+      amount: 10
+
+  - name: You inherit $100
+    effect_type: collect
+    payload:
+      amount: 100

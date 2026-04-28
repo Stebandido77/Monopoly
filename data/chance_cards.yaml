@@ -1,0 +1,104 @@
+# Chance deck — 16 official Hasbro cards (modern US edition).
+#
+# Two simplifications relative to the printed cards are documented inline:
+#
+#   - "Advance to nearest Utility": the printed rule says "throw dice and pay
+#     owner 10 times the amount thrown" if owned. Our engine generalises to a
+#     single "pay_owner_double" flag, so the owner of a utility receives 2x
+#     the normal utility rent (i.e. 2 * 4x or 2 * 10x dice). This keeps the
+#     effect mechanics uniform with the railroad version of the same card.
+#
+#   - "Get Out of Jail Free": the printed card has no payload; we attach
+#     ``deck: chance`` so that when the player uses the card, the engine
+#     returns it to the right deck rather than guessing from the name.
+#
+# Order is irrelevant: ``Deck`` shuffles on construction using the game RNG.
+
+cards:
+  - name: Advance to Go (Collect $200)
+    effect_type: move_to_position
+    payload:
+      position: 0
+      pass_go: true
+
+  - name: Advance to Illinois Avenue
+    effect_type: move_to_position
+    payload:
+      position: 24
+      pass_go: true
+
+  - name: Advance to St. Charles Place
+    effect_type: move_to_position
+    payload:
+      position: 11
+      pass_go: true
+
+  - name: Advance to nearest Utility
+    effect_type: move_to_nearest
+    payload:
+      target_type: utility
+      pay_owner_double: true
+
+  - name: Advance to nearest Railroad
+    effect_type: move_to_nearest
+    payload:
+      target_type: railroad
+      pay_owner_double: true
+
+  - name: Advance to nearest Railroad (second)
+    effect_type: move_to_nearest
+    payload:
+      target_type: railroad
+      pay_owner_double: true
+
+  - name: Bank pays you dividend of $50
+    effect_type: collect
+    payload:
+      amount: 50
+
+  - name: Get Out of Jail Free (Chance)
+    effect_type: get_out_of_jail
+    payload:
+      deck: chance
+
+  - name: Go Back 3 Spaces
+    effect_type: move_relative
+    payload:
+      offset: -3
+
+  - name: Go to Jail
+    effect_type: go_to_jail
+    payload: {}
+
+  - name: General repairs - $25 per house, $100 per hotel
+    effect_type: pay_per_house_and_hotel
+    payload:
+      per_house: 25
+      per_hotel: 100
+
+  - name: Speeding fine $15
+    effect_type: pay
+    payload:
+      amount: 15
+
+  - name: Take a trip to Reading Railroad
+    effect_type: move_to_position
+    payload:
+      position: 5
+      pass_go: true
+
+  - name: Take a walk on the Boardwalk
+    effect_type: move_to_position
+    payload:
+      position: 39
+      pass_go: false
+
+  - name: Chairman of the Board - pay each player $50
+    effect_type: pay_each_player
+    payload:
+      amount: 50
+
+  - name: Building loan matures - collect $150
+    effect_type: collect
+    payload:
+      amount: 150
