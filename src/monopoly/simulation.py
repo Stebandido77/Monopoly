@@ -129,8 +129,10 @@ class MonteCarloRunner:
     seed : int or None
         Master seed. ``None`` uses system entropy (non-reproducible).
     n_workers : int
-        Number of multiprocessing workers. ``-1`` uses every available
-        core. ``1`` keeps everything in-process (no Pool overhead).
+        Number of multiprocessing workers. ``-1`` selects an automatic
+        default: on Windows it stays in-process to avoid ``spawn`` overhead
+        for everyday runs, while on other platforms it uses every available
+        core. ``1`` always keeps everything in-process.
     board_path : str or None
         Path to the board YAML. ``None`` loads the bundled default.
     """
@@ -277,6 +279,8 @@ class MonteCarloRunner:
 
     def _resolve_workers(self) -> int:
         if self.n_workers == -1:
+            if os.name == "nt":
+                return 1
             return os.cpu_count() or 1
         return max(1, self.n_workers)
 
