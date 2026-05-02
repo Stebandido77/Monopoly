@@ -3,6 +3,7 @@
 from monopoly.strategies.aggressive import AggressiveStrategy
 from monopoly.strategies.base import JailAction, MortgageInheritance, Strategy
 from monopoly.strategies.cautious import CautiousStrategy
+from monopoly.strategies.milp_optimal import MILPStrategy
 from monopoly.strategies.random_aggressive import RandomAggressiveStrategy
 from monopoly.strategies.random_strategy import RandomStrategy
 from monopoly.strategies.targeted import TargetedStrategy
@@ -11,6 +12,7 @@ __all__ = [
     "AggressiveStrategy",
     "CautiousStrategy",
     "JailAction",
+    "MILPStrategy",
     "MortgageInheritance",
     "RandomAggressiveStrategy",
     "RandomStrategy",
